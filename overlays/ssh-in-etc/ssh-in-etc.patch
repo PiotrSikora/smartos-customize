@@ -1,0 +1,34 @@
+--- a/etc/ssh/sshd_config
++++ b/etc/ssh/sshd_config
+@@ -81,8 +81,8 @@ LogLevel info
+
+ # Host private key files
+ # Must be on a local disk and readable only by the root user (root:sys 600).
+-HostKey /var/ssh/ssh_host_rsa_key
+-HostKey /var/ssh/ssh_host_dsa_key
++HostKey /etc/ssh/ssh_host_rsa_key
++HostKey /etc/ssh/ssh_host_dsa_key
+
+ # Length of the server key
+ # Default 768, Minimum 512
+--- a/lib/svc/method/sshd
++++ b/lib/svc/method/sshd
+@@ -8,7 +8,6 @@
+ . /lib/svc/share/smf_include.sh
+ 
+ SSHDIR=/etc/ssh
+-SSHKEYDIR=/var/ssh
+ KEYGEN="/usr/bin/ssh-keygen -q"
+ PIDFILE=/var/run/sshd.pid
+ 
+@@ -96,8 +95,8 @@
+ 	# them; sysidconfig is not run in every situation (such as on
+ 	# the install media).
+ 	# 
+-	create_key $SSHKEYDIR/ssh_host_rsa_key rsa
+-	create_key $SSHKEYDIR/ssh_host_dsa_key dsa
++	create_key $SSHDIR/ssh_host_rsa_key rsa
++	create_key $SSHDIR/ssh_host_dsa_key dsa
+ 
+ 	/usr/lib/ssh/sshd
+ 	;;

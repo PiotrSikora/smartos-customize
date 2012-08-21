@@ -1,0 +1,374 @@
+#!/bin/sh
+#
+# Copyright (c) 2011-2012, Piotr Sikora <piotr.sikora@frickle.com>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+FILE_PATH=$1
+CURR_DIR=`pwd`
+TEMP_DIR=$CURR_DIR/.tmp
+
+############################################################
+### DON'T TOUCH BELOW, UNLESS YOU KNOW WHAT YOU'RE DOING ###
+############################################################
+
+MOUNT_DIR=$TEMP_DIR/mount
+BUILD_DIR=$TEMP_DIR/build
+SMARTOS_DIR=$TEMP_DIR/smartos
+BOOTSTRAP_DIR=$SMARTOS_DIR/usbkey
+
+BOOT_ARCHIVE=/platform*/i86pc/amd64/boot_archive
+
+cleanup() {
+    if [ -n "$BDEVICE" ]; then
+        lofi_unmount $SMARTOS_DIR $BDEVICE 2>/dev/null
+    fi
+
+    if [ -n "$IDEVICE" ]; then
+        if [ "${FILE_NAME%.iso}" != "${FILE_NAME}" ]; then
+            lofi_unmount $MOUNT_DIR $IDEVICE 2>/dev/null
+        else
+            lofi_unmount $BUILD_DIR $IDEVICE 2>/dev/null
+        fi
+    fi
+
+    rm -rf $SMARTOS_DIR 2>/dev/null
+    rm -rf $BUILD_DIR 2>/dev/null
+    rm -rf $MOUNT_DIR 2>/dev/null
+    rm $TEMP_DIR/{menu.lst,shadow,sshd_config} 2>/dev/null
+    rmdir $TEMP_DIR 2>/dev/null
+}
+
+usage() {
+    cleanup
+    echo >&2 "USAGE:"
+    echo >&2 "$0 <master_image> <site_dir> [overlay_dir1] [.. overlay_dirN]"
+    echo >&2 "$0 <master_image> -n <overlay_dir1> [.. overlay_dirN]"
+    exit 1
+}
+
+error() {
+    cleanup
+    echo >&2 "\033[31mERROR:\033[00m $1"
+    exit 1
+}
+
+bye() {
+    cleanup
+    echo "DONE."
+    exit 0
+}
+
+info() {
+    echo "\033[01m=====>\033[00m $1"
+}
+
+info2() {
+    echo "\033[01m==>\033[00m $1"
+}
+
+require() {
+    type $1 >/dev/null 2>&1 || error "couldn't find \"$1\"."
+}
+
+lofi_mount() {
+    L_TYP=$1
+    L_ISO=$2
+    L_MNT=$3
+    L_EXT=$4
+
+    L_DEV=`lofiadm -a $L_ISO` || return 1
+    mount -F $L_TYP $L_DEV$L_EXT $L_MNT || return 1
+    echo $L_DEV
+}
+
+lofi_unmount() {
+    L_MNT=$1
+    L_DEV=$2
+
+    umount $L_MNT || return 1
+    lofiadm -d $L_DEV || return 1
+}
+
+copy_dir() {
+    L_DIR=$1
+    L_TO=$2
+
+    [ -d "$L_DIR" ] || return 1
+    mkdir -p $L_TO || return 1
+
+    cd $L_DIR || return 1
+    (find . | grep -v \.patch$ | grep -v ^./manifest$ \
+            | cpio -pdmu $L_TO/ 2>/dev/null) || return 1
+    cd $CURR_DIR || return 1
+}
+
+print_dir() {
+    L_DIR=$1
+    L_PRINT=$2
+
+    [ -n "$L_PRINT" ] || L_PRINT=.
+    [ -d "$L_DIR" ] || return 1
+
+    cd $L_DIR || return 1
+    (find $L_PRINT -type f | grep -v \.patch$ | grep -v ^$L_PRINT/manifest$ \
+                           | sort | cut -b2-) || return 1
+    cd $CURR_DIR || return 1
+}
+
+apply_patches() {
+    L_DIR=$1
+    L_TO=$2
+
+    [ -d "$L_DIR" ] || return 1
+    [ -d "$L_TO" ] || return 1
+
+    cd $L_DIR || return 1
+    for patch in `find . -name "*.patch" | cut -b3-`; do
+        patch -d $L_TO -p1 < $patch || return 1
+    done
+    cd $CURR_DIR || return 1
+}
+
+set_permissions() {
+    L_DIR=$1
+    L_TO=$2
+
+    [ -d "$L_DIR" ] || return 1
+    [ -d "$L_TO" ] || return 1
+    [ -f "$L_DIR/manifest" ] || return 0
+
+    while read line; do
+       L_FILE=`echo $line | cut -f2 -d" "`
+       L_PERM=`echo $line | cut -f3 -d" "`
+       L_OWN=`echo $line | cut -f4-5 -d" " | tr ' ' ':'`
+       chmod $L_PERM $L_TO/$L_FILE || return 1
+       chown $L_OWN $L_TO/$L_FILE || return 1
+    done < $L_DIR/manifest
+}
+
+[ "`id -u`" == "0" ] || error "requires root"
+
+if [ "$2" == "-n" ]; then
+    [ "$#" -ge "3" ] || usage
+else
+    [ "$#" -ge "2" ] || usage
+fi
+
+require lofiadm
+require mkisofs
+require gtar
+
+[ -n "$FILE_PATH" -a -f "$FILE_PATH" ] || error "$FILE_PATH isn't regular file."
+
+FILE_NAME=`basename $FILE_PATH`
+DEST_NAME=`echo $FILE_NAME | cut -f1 -d"."`
+
+if [ "$2" != "-n" ]; then
+    SITE_DIR=$2
+
+    info "verifying configuration from $SITE_DIR/config"
+    CONFIG=`cat $SITE_DIR/config | grep -v ^# | grep -v ^$ | \
+            sed -e "s/^/CONFIG_/"` || error "failed."
+    [ -n "$CONFIG" ] || "failed."
+    eval "$CONFIG" || error "failed."
+
+    [ -n "$CONFIG_admin_nic" -a \
+      -n "$CONFIG_admin_ip" ] || \
+        error "incomplete network configuration."
+
+    [ "$CONFIG_admin_ip" == "dhcp" -o \
+      -n "$CONFIG_admin_netmask" -a \
+      -n "$CONFIG_admin_gateway" ] || \
+        error "incomplete network configuration."
+
+    [ -n "$CONFIG_zpool_disks" ] || \
+        error "missing \"zpool_disks\" parameter."
+
+    [ -f "$SITE_DIR/shadow" -o \
+      -n "$CONFIG_root_shadow" ] || \
+        error "missing shadow file or \"root_shadow\" parameter."
+
+    [ -z "$CONFIG_root_authorized_keys_file" -o \
+      -f "$SITE_DIR/config.inc/$CONFIG_root_authorized_keys_file" ] || \
+        error "\"root_authorized_keys_file\" points to non-existing file."
+
+    if [ -n "$CONFIG_hostname" ]; then
+        DEST_NAME=$DEST_NAME-$CONFIG_hostname
+    else
+        DEST_NAME=$DEST_NAME-`echo $CONFIG_admin_nic | tr ':' '-'`
+    fi
+
+else
+    DEST_NAME=$DEST_NAME-overlays
+fi
+
+shift
+shift
+
+for dir in $*; do
+   [ -d "$dir" ] || error "$dir isn't a directory."
+done
+
+info "preparing customized image"
+
+info2 "creating boot menu"
+mkdir -p $TEMP_DIR || error "failed to create $TEMP_DIR."
+cat > $TEMP_DIR/menu.lst <<EOF
+default=0
+timeout=10
+
+title SmartOS
+   kernel /platform/i86pc/kernel/amd64/unix -B console=text,standalone=true,smartos=true
+   module /platform/i86pc/amd64/boot_archive
+
+title SmartOS (noimport)
+   kernel /platform/i86pc/kernel/amd64/unix -B console=text,standalone=true,noimport=true
+   module /platform/i86pc/amd64/boot_archive
+EOF
+[ $? -eq 0 ] || error "failed."
+
+info2 "copying content from the master image"
+rm -rf $MOUNT_DIR || error "failed to cleanup $MOUNT_DIR."
+mkdir $MOUNT_DIR || error "failed to create $MOUNT_DIR."
+rm -rf $BUILD_DIR || error "failed to cleanup $BUILD_DIR."
+mkdir $BUILD_DIR || error "failed to create $BUILD_DIR."
+
+if [ "${FILE_NAME%.iso}" != "${FILE_NAME}" ]; then
+    DEST_NAME=$DEST_NAME.iso
+    IDEVICE=`lofi_mount hsfs $FILE_PATH $MOUNT_DIR` || error "failed."
+    copy_dir $MOUNT_DIR $BUILD_DIR || error "failed."
+    IDEVICE=`lofi_unmount $MOUNT_DIR $IDEVICE` || error "failed."
+    mv $TEMP_DIR/menu.lst $BUILD_DIR/boot/grub/ || error "failed."
+
+elif [ "${FILE_NAME%.img.bz2}" != "${FILE_NAME}" ]; then
+    DEST_NAME=$DEST_NAME.img.bz2
+    bzcat -k $FILE_PATH > $MOUNT_DIR/${FILE_NAME%.bz2} || error "failed."
+    IDEVICE=`lofi_mount pcfs $MOUNT_DIR/${FILE_NAME%.bz2} $BUILD_DIR :c` || \
+        error "failed."
+    mv $TEMP_DIR/menu.lst $BUILD_DIR/boot/grub/ || error "failed."
+
+elif [ "${FILE_NAME%.tgz}" != "${FILE_NAME}" ]; then
+    DEST_NAME=$DEST_NAME.tgz
+    gtar -zxf $FILE_PATH -C $BUILD_DIR || error "failed."
+
+else
+    error "unknown format of master image"
+fi
+
+rm $BUILD_DIR/platform*/root.password
+print_dir $BUILD_DIR || error "failed."
+
+info "preparing customized boot_archive"
+rm -rf $SMARTOS_DIR || error "failed to cleanup $SMARTOS_DIR."
+mkdir $SMARTOS_DIR || error "failed to create $SMARTOS_DIR."
+
+BDEVICE=`lofi_mount ufs $BUILD_DIR$BOOT_ARCHIVE $SMARTOS_DIR` || error "failed."
+
+for dir in $*; do
+    info2 "applying overlay from $dir"
+    copy_dir $dir $SMARTOS_DIR || error "failed."
+    print_dir $dir || error "failed."
+    apply_patches $dir $SMARTOS_DIR || error "failed."
+    set_permissions $dir $SMARTOS_DIR || error "failed."
+done
+
+if [ -n "$SITE_DIR" ]; then
+    info2 "copying site configuration from $SITE_DIR"
+    rm -rf $BOOTSTRAP_DIR || error "failed to cleanup $BOOTSTRAP_DIR."
+    copy_dir $SITE_DIR $BOOTSTRAP_DIR || error "failed."
+    print_dir $SMARTOS_DIR ./usbkey || error "failed."
+    chown root:root $BOOTSTRAP_DIR || error "failed."
+    chmod 700 $BOOTSTRAP_DIR || error "failed."
+fi
+
+if [ -f "$BOOTSTRAP_DIR/shadow" ]; then
+    info2 "replacing /etc/shadow with $SITE_DIR/shadow"
+    chown root:sys $BOOTSTRAP_DIR/shadow || error "failed."
+    chmod 400 $BOOTSTRAP_DIR/shadow || error "failed."
+    cp -p $BOOTSTRAP_DIR/shadow $SMARTOS_DIR/etc/shadow || error "failed."
+
+elif [ -n "$CONFIG_root_shadow" ]; then
+    info2 "updating /etc/shadow with new root password"
+    sed -e "s|^root:[^\:]*:|root:$CONFIG_root_shadow:|" \
+        $SMARTOS_DIR/etc/shadow > $TEMP_DIR/shadow || error "failed."
+    mv $TEMP_DIR/shadow $SMARTOS_DIR/etc/shadow || error "failed."
+    chown root:sys $SMARTOS_DIR/etc/shadow || error "failed."
+    chmod 400 $SMARTOS_DIR/etc/shadow || error "failed."
+fi
+
+if [ -n "$CONFIG_root_authorized_keys_file" ]; then
+    info2 "disabling SSH keyboard-interactive login for root"
+    sed -e "s|^PermitRootLogin.*$|PermitRootLogin without-password|" \
+        $SMARTOS_DIR/etc/ssh/sshd_config > $TEMP_DIR/sshd_config || \
+        error "failed."
+    mv $TEMP_DIR/sshd_config $SMARTOS_DIR/etc/ssh/sshd_config
+    chown root:sys $SMARTOS_DIR/etc/ssh/sshd_config || error "failed."
+    chmod 644 $SMARTOS_DIR/etc/ssh/sshd_config || error "failed."
+fi
+
+BDEVICE=`lofi_unmount $SMARTOS_DIR $BDEVICE` || error "failed."
+
+info "building customized image"
+
+if [ -n "$SITE_DIR" ]; then
+    echo
+    echo \ \ \ \ \ \ \ \ hostname: ${CONFIG_hostname:--}
+    echo
+    echo \ \ \ \ \ \ \ admin_nic: $CONFIG_admin_nic
+    echo \ \ \ \ \ \ \ \ admin_ip: $CONFIG_admin_ip
+    if [ "$CONFIG_admin_ip" != "dhcp" ]; then
+        echo \ \ \ admin_netmask: $CONFIG_admin_netmask
+        echo \ \ \ admin_gateway: $CONFIG_admin_gateway
+    fi
+    echo
+    echo \ \ \ dns_resolvers: ${CONFIG_dns_resolvers:--}
+    echo \ \ \ \ \ \ dns_domain: ${CONFIG_dns_domain:--}
+    echo \ \ \ \ \ \ \ ntp_hosts: ${CONFIG_ntp_hosts:--}
+    echo
+    echo \ \ \ \ \ root_shadow: ${CONFIG_root_shadow:--}
+    echo \ authorized_keys: ${CONFIG_root_authorized_keys_file:--}
+    echo
+    echo \ \ \ \ \ zpool_disks: $CONFIG_zpool_disks
+    echo \ \ \ \ disk_install: $CONFIG_disk_install
+    echo
+fi
+
+if [ "${FILE_NAME%.iso}" != "${FILE_NAME}" ]; then
+    mkisofs -quiet -R -b boot/grub/stage2_eltorito \
+        -no-emul-boot -boot-load-size 4 -boot-info-table \
+        -o $DEST_NAME $BUILD_DIR || error "failed."
+
+elif [ "${FILE_NAME%.img.bz2}" != "${FILE_NAME}" ]; then
+    IDEVICE=`lofi_unmount $BUILD_DIR $IDEVICE` || error "failed."
+    bzip2 $MOUNT_DIR/${FILE_NAME%.bz2} || error "failed."
+    mv $MOUNT_DIR/$FILE_NAME $DEST_NAME || error "failed."
+
+else
+    gtar -zcf $DEST_NAME -C $BUILD_DIR . || error "failed."
+fi
+
+cleanup
+
+info "done"
+echo "$DEST_NAME"

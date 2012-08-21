@@ -1,0 +1,28 @@
+### Network / admin interface
+# MAC address
+admin_nic=01:02:03:04:05:06
+# 'dhcp' or IP address and network mask
+admin_ip=192.168.1.2
+admin_netmask=255.255.255.0
+# Default gateway
+admin_gateway=192.168.1.1
+
+### Network / misc
+# DNS resolvers
+dns_resolvers=4.2.2.2,8.8.8.8
+# DNS search domain
+dns_domain=local
+# NTP server / pool 
+ntp_hosts=pool.ntp.org
+
+### Root access
+# 'NP' or single-quoted password
+root_shadow='$2a$04$AGfJpd2n/woAySOpOBrjJ.9NfVWS5HDyQZIQgoK0uQu94R7b2IY8u'
+# Filename of root's authorized_keys
+#root_authorized_keys_file=id_rsa.pub
+
+### Disks
+# 'all' or single-quoted list of devices
+zpool_disks='all'
+# 'cd', 'usb' or 'fs'
+#disk_install=

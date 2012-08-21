@@ -1,0 +1,162 @@
+diff --git a/lib/svc/method/fs-joyent b/lib/svc/method/fs-joyent
+index f9dd324..79e5771 100755
+--- a/lib/svc/method/fs-joyent
++++ b/lib/svc/method/fs-joyent
+@@ -93,7 +93,7 @@ if [ $? -ne 0 ]; then
+ 
+   if [[ -n $(/bin/bootparams | grep '^headnode=true') || \
+         -n $(/bin/bootparams | grep '^smartos=true') ]]; then
+-        mkdir /usbkey
++        mkdir -p /usbkey
+     mount -F zfs ${SYS_ZPOOL}/usbkey /usbkey
+   fi
+   if [[ -n $(/bin/bootparams | grep '^smartos=true') ]]; then
+diff --git a/lib/svc/method/smartdc-config b/lib/svc/method/smartdc-config
+index 36ba5b4..9fd9669 100644
+--- a/lib/svc/method/smartdc-config
++++ b/lib/svc/method/smartdc-config
+@@ -96,7 +96,7 @@ case "$1" in
+             [[ ! -f ${USB_PATH}/config ]] && exit $SMF_EXIT_OK
+         fi
+     elif /bin/bootparams | grep "^smartos=true" > /dev/null 2>&1; then
+-        USB_PATH=/`svcprop -p "joyentfs/usb_copy_path" svc:/system/filesystem/smartdc:default`
++        USB_PATH=`svcprop -p "joyentfs/usb_copy_path" svc:/system/filesystem/smartdc:default`
+ 
+         # Check for config and run interactive if it doesn't exist.
+         if [[ ! -f ${USB_PATH}/config ]]; then
+@@ -110,6 +110,13 @@ case "$1" in
+ 
+             # If user quit from interactive configuration then we're done.
+             [[ ! -f ${USB_PATH}/config ]] && exit $SMF_EXIT_OK
++
++        elif [[ -z `zfs mount | awk '{print $2}' | grep "^${USB_PATH}$"` ]]; then
++            # ${USB_PATH}/config exists but ${USB_PATH} isn't ZFS dataset,
++            # so it must be pre-populated image ready for auto-config.
++
++            /smartdc/bin/smartos_prompt_config.sh "${USB_PATH}" \
++                </dev/console >&/dev/console
+         fi
+     fi
+ 
+diff --git a/smartdc/bin/smartos_prompt_config.sh b/smartdc/bin/smartos_prompt_config.sh
+index c51fa99..e62b868 100644
+--- a/smartdc/bin/smartos_prompt_config.sh
++++ b/smartdc/bin/smartos_prompt_config.sh
+@@ -10,6 +10,9 @@ export PATH
+ load_sdc_sysinfo
+ load_sdc_config
+ 
++# Arguments
++USB_PATH=$1
++
+ # Defaults
+ datacenter_headnode_id=0
+ mail_to="root@localhost"
+@@ -310,7 +313,7 @@ create_dump()
+     # Create the dump zvol
+     zfs create -V ${base_size}mb ${SYS_ZPOOL}/dump || \
+       fatal "failed to create the dump zvol"
+-    dumpadm -d /dev/zvol/dsk/${SYS_ZPOOL}/dump
++    dumpadm -d /dev/zvol/dsk/${SYS_ZPOOL}/dump >/dev/null
+ }
+ 
+ #
+@@ -338,9 +341,17 @@ setup_datasets()
+   if ! echo $datasets | grep ${USBKEYDS} > /dev/null; then
+     if [[ -n $(/bin/bootparams | grep "^smartos=true") ]]; then
+         printf "%-56s" "Creating config dataset... " 
+-        zfs create -o mountpoint=legacy ${USBKEYDS} || \
+-          fatal "failed to create the config dataset"
+-        mkdir /usbkey
++        zfs create ${USBKEYDS} || fatal "failed to create the config dataset"
++        chmod 700 /${USBKEYDS}
++        if [[ -d /usbkey ]]; then
++            cd /usbkey
++            if ( ! find . -print | cpio -pdm /${USBKEYDS} 2>/dev/null ); then
++                fatal "failed to initialize the config dataset"
++            fi
++            cd /
++        fi
++        zfs set mountpoint=legacy ${USBKEYDS}
++        mkdir -p /usbkey
+         mount -F zfs ${USBKEYDS} /usbkey
+         printf "%4s\n" "done" 
+     fi
+@@ -372,6 +383,7 @@ setup_datasets()
+     fi
+ 
+     zfs set mountpoint=legacy ${VARDS}
++    printf "%4s\n" "done"
+ 
+     if ! echo $datasets | grep ${SWAPVOL} > /dev/null; then
+           printf "%-56s" "Creating swap zvol... " 
+@@ -388,8 +400,8 @@ setup_datasets()
+           size=${SYSINFO_MiB_of_Memory}
+           zfs create -V ${size}mb ${SWAPVOL}
+           swap -a /dev/zvol/dsk/${SWAPVOL}
++          printf "%4s\n" "done"
+     fi
+-    printf "%4s\n" "done" 
+   fi
+ }
+ 
+@@ -400,7 +412,7 @@ create_zpool()
+     pool=zones
+ 
+     # If the pool already exists, don't create it again.
+-    if /usr/sbin/zpool list -H -o name $pool; then
++    if /usr/sbin/zpool list -H -o name $pool >/dev/null 2>&1; then
+         return 0
+     fi
+ 
+@@ -450,6 +462,10 @@ create_zpools()
+ {
+   devs=$1
+ 
++  if [[ ${devs} == "all" ]]; then
++      devs=$(disklist -n)
++  fi
++
+   export SYS_ZPOOL="zones"
+   create_zpool "$devs"
+   sleep 5
+@@ -524,6 +540,39 @@ export TERM=sun-color
+ export TERM=xterm-color
+ stty erase ^H
+ 
++#
++# Auto-config
++#
++if [ -f "${USB_PATH}/config" -a -n "${CONFIG_zpool_disks}" ]; then
++
++    printheader "Automatic Configuration"
++
++    create_zpools "${CONFIG_zpool_disks}"
++
++    if [[ ! -f ${USB_PATH}/shadow ]]; then
++        if [[ -n $CONFIG_root_shadow ]]; then
++            sed -e "s|^root:[^\:]*:|root:${CONFIG_root_shadow}:|" \
++                /etc/shadow > ${USB_PATH}/shadow
++        else
++            cp /etc/shadow ${USB_PATH}/shadow
++        fi
++
++        chmod 400 ${USB_PATH}/shadow
++    fi
++
++    if [[ ! -d ${USB_PATH}/ssh ]]; then
++        cp -rp /etc/ssh ${USB_PATH}/ssh
++    fi
++
++    cp /usr/img/etc/sources.list.sample /var/db/imgadm/sources.list
++
++    echo
++    echo "This system was automatically configured and will now reboot"
++
++    sleep 3
++    reboot
++fi
++
+ printheader "Copyright 2011, Joyent, Inc."
+ 
+ message="

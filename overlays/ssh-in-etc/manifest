@@ -1,0 +1,2 @@
+f etc/ssh/sshd_config 0644 root sys
+f lib/svc/method/sshd 0555 root bin

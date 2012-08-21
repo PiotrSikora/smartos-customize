@@ -1,0 +1,125 @@
+diff --git a/smartdc/bin/smartos_prompt_config.sh b/smartdc/bin/smartos_prompt_config.sh
+index c51fa99..d3cf771 100644
+--- a/smartdc/bin/smartos_prompt_config.sh
++++ b/smartdc/bin/smartos_prompt_config.sh
+@@ -393,6 +393,85 @@ setup_datasets()
+   fi
+ }
+ 
++create_slices()
++{
++    disks=$1
++
++    for disk in ${disks}; do
++        fdisk -B /dev/rdsk/${disk}p0
++        prtvtoc -h /dev/rdsk/${disk}p0 | \
++            awk '$1=="2" {print; count=$5}
++                 $1=="8" {print; first=$5}
++                 END     {count-=first; print "0 2 00 "first" "count}' | \
++            fmthard -s - /dev/rdsk/${disk}s2 >/dev/null
++        slices="${slices} ${disk}s0"
++    done
++
++    echo "${slices}"
++}
++
++copy_smartos()
++{
++    dlopt=$1
++    ftype=$2
++    [[ $ftype == "pcfs" ]] && fext=":c"
++    target=$3
++
++    for disk in `disklist $dlopt`; do
++        mount -F $ftype -r /dev/dsk/${disk}p0$fext /mnt 2>/dev/null || continue
++        if [ -f /mnt/platform/i86pc/amd64/boot_archive ]; then
++            cp -rp /mnt/platform ${target}/smartos/
++            cp -rp /mnt/boot ${target}/
++            umount /mnt
++            break
++        fi
++        umount /mnt
++    done
++}
++
++install_smartos()
++{
++    disks=$1
++
++    printf "%-56s" "Installing SmartOS to disk... "
++    zfs create ${SYS_ZPOOL}/smartos
++
++    if [[ ${CONFIG_disk_install} == "cd" ]]; then
++        copy_smartos -r hsfs /${SYS_ZPOOL}
++
++    elif [[ ${CONFIG_disk_install} == "usb" ]]; then
++        copy_smartos -r pcfs /${SYS_ZPOOL}
++
++    elif [[ ${CONFIG_disk_install} == "fs" ]]; then
++        cp -rp /tmp/smartos/platform /${SYS_ZPOOL}/smartos/
++        cp -rp /tmp/boot /${SYS_ZPOOL}/
++    fi
++
++    cd /${SYS_ZPOOL}/boot/grub
++
++    if [[ -f ${USB_PATH}/menu.lst ]]; then
++        cp ${USB_PATH}/menu.lst .
++
++    else
++        cat menu.lst | \
++            awk "BEGIN   {print \"findroot (pool_${SYS_ZPOOL},0,a)\"}
++                         {print}
++                 /title/ {print \"   bootfs ${SYS_ZPOOL}/smartos\"}" \
++            > menu.tmp && mv menu.tmp menu.lst
++    fi
++
++    find /${SYS_ZPOOL}/{boot,smartos} -type d -exec chmod 755 {} \;
++    find /${SYS_ZPOOL}/{boot,smartos} -type f -exec chmod 640 {} \;
++
++    for disk in ${disks}; do
++        installgrub stage1 stage2 /dev/rdsk/${disk}s0 >/dev/null
++    done
++
++    zpool set bootfs=${SYS_ZPOOL}/smartos ${SYS_ZPOOL}
++    zfs snapshot ${SYS_ZPOOL}/smartos@install-time
++
++    printf "%4s\n" "done"
++}
+ 
+ create_zpool()
+ {
+@@ -404,6 +483,10 @@ create_zpool()
+         return 0
+     fi
+ 
++    if [[ -n ${CONFIG_disk_install} ]]; then
++        disks=$(create_slices "${disks}")
++    fi
++
+     disk_count=$(echo "${disks}" | wc -w | tr -d ' ')
+     printf "%-56s" "Creating pool $pool... " 
+ 
+@@ -450,6 +533,11 @@ create_zpools()
+ {
+   devs=$1
+ 
++  if [[ ${CONFIG_disk_install} == "fs" ]]; then
++      mkdir /tmp/smartos
++      copy_smartos -n pcfs /tmp
++  fi
++
+   export SYS_ZPOOL="zones"
+   create_zpool "$devs"
+   sleep 5
+@@ -465,6 +553,11 @@ create_zpools()
+   export SWAPVOL=${SYS_ZPOOL}/swap
+   
+   setup_datasets
++
++  if [[ -n ${CONFIG_disk_install} ]]; then
++      install_smartos "$devs"
++  fi
++
+   #
+   # Since there may be more than one storage pool on the system, put a
+   # file with a certain name in the actual "system" pool.
