@@ -27,6 +27,7 @@
 FILE_PATH=$1
 CURR_DIR=`pwd`
 TEMP_DIR=$CURR_DIR/.tmp
+BOOT_DIR=`dirname $0`/boot
 
 ############################################################
 ### DON'T TOUCH BELOW, UNLESS YOU KNOW WHAT YOU'RE DOING ###
@@ -266,6 +267,8 @@ elif [ "${FILE_NAME%.img.bz2}" != "${FILE_NAME}" ]; then
     bzcat -k $FILE_PATH > $MOUNT_DIR/${FILE_NAME%.bz2} || error "failed."
     IDEVICE=`lofi_mount pcfs $MOUNT_DIR/${FILE_NAME%.bz2} $BUILD_DIR :c` || \
         error "failed."
+    rm -rf $BUILD_DIR/boot || error "failed."
+    copy_dir $BOOT_DIR $BUILD_DIR/boot # XXX cpio chown() fails on pcfs
     mv $TEMP_DIR/menu.lst $BUILD_DIR/boot/grub/ || error "failed."
 
 elif [ "${FILE_NAME%.tgz}" != "${FILE_NAME}" ]; then
