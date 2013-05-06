@@ -177,8 +177,10 @@ else
 fi
 
 require lofiadm
-require mkisofs
 require gtar
+require patch
+
+[ "${FILE_PATH%.iso}" != "${FILE_PATH}" ] && require mkisofs
 
 [ -n "$FILE_PATH" -a -f "$FILE_PATH" ] || error "$FILE_PATH isn't regular file."
 
