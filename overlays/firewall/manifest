@@ -1,0 +1,3 @@
+f etc/ipf/ipf.conf 0644 root sys
+f lib/svc/method/fs-joyent 0555 root bin
+f smartdc/bin/smartos_prompt_config.sh 0555 root bin

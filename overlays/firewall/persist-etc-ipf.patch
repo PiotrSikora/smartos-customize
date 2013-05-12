@@ -1,0 +1,26 @@
+diff --git a/lib/svc/method/fs-joyent b/lib/svc/method/fs-joyent
+index db1f9e5..e8542eb 100755
+--- a/lib/svc/method/fs-joyent
++++ b/lib/svc/method/fs-joyent
+@@ -99,6 +99,9 @@ if [ $? -ne 0 ]; then
+   if [[ -n $(/bin/bootparams | grep '^smartos=true') ]]; then
+     mount -F lofs /usbkey/shadow /etc/shadow
+     mount -F lofs /usbkey/ssh /etc/ssh
++    if [[ -d /usbkey/ipf ]]; then
++      mount -F lofs /usbkey/ipf /etc/ipf
++    fi
+   fi
+ 
+   swap -a /dev/zvol/dsk/${SYS_ZPOOL}/swap
+diff --git a/smartdc/bin/smartos_prompt_config.sh b/smartdc/bin/smartos_prompt_config.sh
+index e89997c..f8e97a6 100644
+--- a/smartdc/bin/smartos_prompt_config.sh
++++ b/smartdc/bin/smartos_prompt_config.sh
+@@ -674,6 +674,7 @@ sed -e "s|^root:[^\:]*:|root:${root_shadow}:|" /etc/shadow > /usbkey/shadow \
+       && chmod 400 /usbkey/shadow
+ 
+ cp -rp /etc/ssh /usbkey/ssh
++cp -rp /etc/ipf /usbkey/ipf
+ 
+ reboot
+ 
