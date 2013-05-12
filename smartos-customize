@@ -379,6 +379,8 @@ else
     gtar -zcf $DEST_NAME -C $BUILD_DIR . || error "failed."
 fi
 
+sum -x sha256 "$DEST_NAME" > "$DEST_NAME.sha256"
+
 cleanup
 
 info "done"
