@@ -1,0 +1,13 @@
+diff --git a/lib/svc/method/identity-node b/lib/svc/method/identity-node
+index 7c3f4ec..1464438 100755
+--- a/lib/svc/method/identity-node
++++ b/lib/svc/method/identity-node
+@@ -90,7 +90,7 @@ if smf_is_globalzone; then
+       fallback_mac=$(set | grep "^SYSINFO_Network_Interface_.*_MAC_Address" | head -n1 | cut -d'=' -f2)
+   fi
+ 
+-  if [[ -z $hostname ]]; then
++  if [[ -z $hostname ]] || [[ $hostname == "unknown" ]]; then
+     hostname=$SYSINFO_Bootparam_hostname
+   fi
+ fi
