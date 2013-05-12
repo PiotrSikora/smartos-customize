@@ -1,5 +1,5 @@
 diff --git a/lib/svc/method/fs-joyent b/lib/svc/method/fs-joyent
-index f9dd324..79e5771 100755
+index db1f9e5..1f754fb 100755
 --- a/lib/svc/method/fs-joyent
 +++ b/lib/svc/method/fs-joyent
 @@ -93,7 +93,7 @@ if [ $? -ne 0 ]; then
@@ -39,7 +39,7 @@ index 36ba5b4..9fd9669 100644
      fi
  
 diff --git a/smartdc/bin/smartos_prompt_config.sh b/smartdc/bin/smartos_prompt_config.sh
-index c51fa99..e62b868 100644
+index e89997c..995b5d6 100644
 --- a/smartdc/bin/smartos_prompt_config.sh
 +++ b/smartdc/bin/smartos_prompt_config.sh
 @@ -10,6 +10,9 @@ export PATH
@@ -120,7 +120,7 @@ index c51fa99..e62b868 100644
    export SYS_ZPOOL="zones"
    create_zpool "$devs"
    sleep 5
-@@ -524,6 +540,39 @@ export TERM=sun-color
+@@ -524,6 +540,41 @@ export TERM=sun-color
  export TERM=xterm-color
  stty erase ^H
  
@@ -148,7 +148,9 @@ index c51fa99..e62b868 100644
 +        cp -rp /etc/ssh ${USB_PATH}/ssh
 +    fi
 +
-+    cp /usr/img/etc/sources.list.sample /var/db/imgadm/sources.list
++    if [[ ! -d ${USB_PATH}/ipf ]]; then
++        cp -rp /etc/ipf ${USB_PATH}/ipf
++    fi
 +
 +    echo
 +    echo "This system was automatically configured and will now reboot"
